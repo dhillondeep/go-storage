@@ -2,8 +2,9 @@ package storage
 
 import (
 	"context"
-	"gocloud.dev/gcerrors"
 	"io"
+
+	"gocloud.dev/gcerrors"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/endpoints"
@@ -14,13 +15,14 @@ import (
 	"gocloud.dev/blob/s3blob"
 )
 
-func NewS3FS(bucket string) FS {
+func NewS3FS(bucket string, cfgs ...*aws.Config) FS {
 	return &s3FS{bucket: bucket}
 }
 
 // s3FS is an implementation of FS which uses AWS s3FS as the underlying storage layer.
 type s3FS struct {
 	bucket string // bucket is the name of the bucket to use as the underlying storage.
+	cfgs   []*aws.Config
 }
 
 // Open implements FS.
@@ -128,7 +130,7 @@ func (s *s3FS) Walk(ctx context.Context, path string, fn WalkFn) error {
 const bucketRegionHint = endpoints.UsEast1RegionID
 
 func (s *s3FS) bucketHandles(ctx context.Context) (*blob.Bucket, error) {
-	sess, err := session.NewSession()
+	sess, err := session.NewSession(s.cfgs...)
 	if err != nil {
 		return nil, errors.Wrap(err, "s3: unable to create session")
 	}
