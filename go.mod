@@ -1,4 +1,4 @@
-module github.com/Shopify/go-storage
+module github.com/dhillondeep/go-storage
 
 go 1.13
 

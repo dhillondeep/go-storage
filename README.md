@@ -2,7 +2,7 @@
 
 storage is a Go package which abstracts file systems (local, in-memory, Google Cloud Storage, S3) into a few interfaces.  It includes convenience wrappers for simplifying common file system use cases such as caching, prefix isolation and more!
 
-Forked from https://github.com/sajari/storage
+Forked from https://github.com/Shopify/go-storage
 
 # Requirements
 
@@ -11,7 +11,7 @@ Forked from https://github.com/sajari/storage
 # Installation
 
 ```console
-$ go get github.com/Shopify/go-storage
+$ go get github.com/dhillondeep/go-storage
 ```
 
 # Usage
@@ -109,6 +109,15 @@ if err != nil {
 f.Close()
 ```
 
+You can also use `ClientOption` to provide custom authentication:
+```go
+creds, err := google.CredentialsFromJSON(context.Background(), []byte("JSON data"))
+if err != nil {
+    // ...
+}
+store := storage.NewCloudStorageFS("some-bucket", option.WithCredentials(creds))
+```
+
 ## S3
 
 S3 is the default implementation for AWS S3. This uses [aws-sdk-go/aws/session.NewSession](http://docs.aws.amazon.com/sdk-for-go/api/aws/session/#NewSession) for authentication.
@@ -120,6 +129,14 @@ if err != nil {
 }
 // ...
 f.Close()
+```
+
+You can also provide `aws.Config` to provide custom authentication:
+```go
+store := store.S3{Buket:"some-bucket", &aws.Config{
+		Region:      aws.String("region"),
+		Credentials: credentials.NewStaticCredentials("secretId", "secretKey", ""),
+})
 ```
 
 ## Wrappers and Helpers
