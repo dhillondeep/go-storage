@@ -2,25 +2,25 @@ package storage
 
 import (
 	"context"
-	"gocloud.dev/gcerrors"
 	"io"
+	"time"
 
+	"google.golang.org/api/option"
+
+	credentials "cloud.google.com/go/iam/credentials/apiv1"
+	"cloud.google.com/go/storage"
 	"github.com/pkg/errors"
-	"gocloud.dev/blob"
-	"gocloud.dev/blob/gcsblob"
-	"gocloud.dev/gcp"
-	"golang.org/x/oauth2/google"
-	"google.golang.org/api/storage/v1"
+	credentialspb "google.golang.org/genproto/googleapis/iam/credentials/v1"
 )
 
 var ErrCredentialsMissing = errors.New("credentials missing")
 
 // NewCloudStorageFS creates a Google Cloud Storage FS
 // credentials can be nil to use the default GOOGLE_APPLICATION_CREDENTIALS
-func NewCloudStorageFS(bucket string, credentials *google.Credentials) FS {
+func NewCloudStorageFS(bucket string, opts ...option.ClientOption) FS {
 	return &cloudStorageFS{
-		bucket:      bucket,
-		credentials: credentials,
+		bucket: bucket,
+		opts:   opts,
 	}
 }
 
@@ -28,40 +28,57 @@ func NewCloudStorageFS(bucket string, credentials *google.Credentials) FS {
 // file storage.
 type cloudStorageFS struct {
 	// bucket is the name of the bucket to use as the underlying storage.
-	bucket      string
-	credentials *google.Credentials
+	bucket string
+	opts   []option.ClientOption
 }
 
 func (c *cloudStorageFS) URL(ctx context.Context, path string, options *SignedURLOptions) (string, error) {
-	b, err := c.bucketHandleForSigning(ctx, storage.DevstorageReadOnlyScope)
+	creds, err := credentials.NewIamCredentialsClient(ctx, c.opts...)
 	if err != nil {
-		return "", err
+		return "", errors.Wrap(err, "cloud stoarge: error while creating credentials")
 	}
 
-	var blobOptions *blob.SignedURLOptions
+	var storageOptions *storage.SignedURLOptions
 	if options != nil {
-		o := blob.SignedURLOptions(*options)
-		blobOptions = &o
+		o := storage.SignedURLOptions(*options)
+		storageOptions = &o
 	}
 
-	return b.SignedURL(ctx, path, blobOptions)
+	if storageOptions.Expires.IsZero() {
+		storageOptions.Expires = time.Now().Add(15 * time.Minute)
+	}
+
+	storageOptions.Method = "GET"
+	storageOptions.SignBytes = func(b []byte) ([]byte, error) {
+		req := &credentialspb.SignBlobRequest{
+			Payload: b,
+			Name:    storageOptions.GoogleAccessID,
+		}
+		resp, err := creds.SignBlob(ctx, req)
+		if err != nil {
+			return nil, errors.Wrap(err, "cloud storage: error signing blob for SignURL")
+		}
+		return resp.SignedBlob, err
+	}
+
+	return storage.SignedURL(c.bucket, path, storageOptions)
 }
 
 // Open implements FS.
 func (c *cloudStorageFS) Open(ctx context.Context, path string, options *ReaderOptions) (*File, error) {
-	b, err := c.bucketHandle(ctx, storage.DevstorageReadOnlyScope)
+	b, err := c.bucketHandle(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	f, err := b.NewReader(ctx, path, nil)
+	f, err := b.Object(path).NewReader(ctx)
 	if err != nil {
-		if gcerrors.Code(err) == gcerrors.NotFound {
+		if err == storage.ErrObjectNotExist {
 			return nil, &notExistError{
 				Path: path,
 			}
 		}
-		return nil, err
+		return nil, errors.Wrap(err, "cloud storage: error fetching object attributes")
 	}
 
 	return &File{
@@ -69,19 +86,19 @@ func (c *cloudStorageFS) Open(ctx context.Context, path string, options *ReaderO
 		Attributes: Attributes{
 			ContentType: f.ContentType(),
 			Size:        f.Size(),
-			ModTime:     f.ModTime(),
+			ModTime:     f.Attrs.LastModified,
 		},
 	}, nil
 }
 
 // Attributes implements FS.
 func (c *cloudStorageFS) Attributes(ctx context.Context, path string, options *ReaderOptions) (*Attributes, error) {
-	b, err := c.bucketHandle(ctx, storage.DevstorageReadOnlyScope)
+	b, err := c.bucketHandle(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	a, err := b.Attributes(ctx, path)
+	a, err := b.Object(path).Attrs(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -89,50 +106,57 @@ func (c *cloudStorageFS) Attributes(ctx context.Context, path string, options *R
 	return &Attributes{
 		ContentType: a.ContentType,
 		Metadata:    a.Metadata,
-		ModTime:     a.ModTime,
+		ModTime:     a.Updated,
 		Size:        a.Size,
 	}, nil
 }
 
 // Create implements FS.
 func (c *cloudStorageFS) Create(ctx context.Context, path string, options *WriterOptions) (io.WriteCloser, error) {
-	b, err := c.bucketHandle(ctx, storage.DevstorageReadWriteScope)
+	b, err := c.bucketHandle(ctx)
 	if err != nil {
 		return nil, err
 	}
-	var blobOpts *blob.WriterOptions
-	if options != nil {
-		blobOpts = &blob.WriterOptions{
-			Metadata:    options.Attributes.Metadata,
-			ContentType: options.Attributes.ContentType,
-			BufferSize:  options.BufferSize,
-		}
+
+	obj := b.Object(path)
+
+	writer := obj.NewWriter(ctx)
+	writer.Metadata = options.Attributes.Metadata
+	writer.ContentType = options.Attributes.ContentType
+	writer.Size = options.Attributes.Size
+	writer.ChunkSize = options.BufferSize
+
+	if options.ACL != nil {
+		writer.ACL = options.ACL
+	} else {
+		writer.ACL = []storage.ACLRule{{Entity: storage.AllAuthenticatedUsers, Role: storage.RoleReader}}
 	}
-	return b.NewWriter(ctx, path, blobOpts)
+
+	return writer, nil
 }
 
 // Delete implements FS.
 func (c *cloudStorageFS) Delete(ctx context.Context, path string) error {
-	b, err := c.bucketHandle(ctx, storage.DevstorageFullControlScope)
+	b, err := c.bucketHandle(ctx)
 	if err != nil {
 		return err
 	}
-	return b.Delete(ctx, path)
+	return b.Object(path).Delete(ctx)
 }
 
 // Walk implements FS.
 func (c *cloudStorageFS) Walk(ctx context.Context, path string, fn WalkFn) error {
-	bh, err := c.bucketHandle(ctx, storage.DevstorageReadOnlyScope)
+	b, err := c.bucketHandle(ctx)
 	if err != nil {
 		return err
 	}
 
-	it := bh.List(&blob.ListOptions{
+	it := b.Objects(ctx, &storage.Query{
 		Prefix: path,
 	})
 
 	for {
-		r, err := it.Next(ctx)
+		r, err := it.Next()
 		if err == io.EOF {
 			break
 		}
@@ -141,61 +165,27 @@ func (c *cloudStorageFS) Walk(ctx context.Context, path string, fn WalkFn) error
 			return err
 		}
 
-		if err = fn(r.Key); err != nil {
+		if err = fn(r.Name); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (c *cloudStorageFS) findCredentials(ctx context.Context, scope string, extraScopes ...string) (*google.Credentials, error) {
-	if c.credentials != nil {
-		return c.credentials, nil
+func (c *cloudStorageFS) client(ctx context.Context) (*storage.Client, error) {
+	client, err := storage.NewClient(ctx, c.opts...)
+	if err != nil {
+		return nil, errors.Wrap(err, "cloud storage: unable to create client")
 	}
-	return google.FindDefaultCredentials(ctx, append(extraScopes, scope)...)
+
+	return client, nil
 }
 
-func (c *cloudStorageFS) client(ctx context.Context, scope string, extraScopes ...string) (*gcp.HTTPClient, *google.Credentials, error) {
-	creds, err := c.findCredentials(ctx, scope, extraScopes...)
-	if err != nil {
-		return nil, nil, errors.Wrap(err, "cloud storage: unable to retrieve default token source")
-	}
-
-	client, err := gcp.NewHTTPClient(gcp.DefaultTransport(), gcp.CredentialsTokenSource(creds))
-	if err != nil {
-		return nil, nil, errors.Wrap(err, "cloud storage: unable to build http client")
-	}
-
-	return client, creds, nil
-}
-
-func (c *cloudStorageFS) bucketHandle(ctx context.Context, scope string, extraScopes ...string) (*blob.Bucket, error) {
-	client, _, err := c.client(ctx, scope, extraScopes...)
+func (c *cloudStorageFS) bucketHandle(ctx context.Context) (*storage.BucketHandle, error) {
+	client, err := c.client(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	return gcsblob.OpenBucket(ctx, client, c.bucket, nil)
-}
-
-func (c *cloudStorageFS) bucketHandleForSigning(ctx context.Context, scope string, extraScopes ...string) (*blob.Bucket, error) {
-	client, creds, err := c.client(ctx, scope, extraScopes...)
-	if err != nil {
-		return nil, err
-	}
-
-	if creds == nil {
-		return nil, ErrCredentialsMissing
-	}
-
-	config, err := google.JWTConfigFromJSON(creds.JSON, append(extraScopes, scope)...)
-	if err != nil {
-		return nil, errors.Wrap(err, "cloud storage: parse credentials")
-	}
-	options := &gcsblob.Options{
-		PrivateKey:     config.PrivateKey,
-		GoogleAccessID: config.Email,
-	}
-
-	return gcsblob.OpenBucket(ctx, client, c.bucket, options)
+	return client.Bucket(c.bucket), nil
 }

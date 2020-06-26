@@ -7,7 +7,7 @@ import (
 	"io"
 	"time"
 
-	"gocloud.dev/blob"
+	"cloud.google.com/go/storage"
 )
 
 // File contains the metadata required to define a file (for reading).
@@ -58,6 +58,12 @@ type WriterOptions struct {
 	// If the Writer is used to do many small writes concurrently, using a
 	// smaller BufferSize may reduce memory usage.
 	BufferSize int
+
+	// Gcloud cloud storage allows for access control and ACL can be used
+	// to specify the access
+	//
+	// default: []storage.ACLRule{{Entity: storage.AllAuthenticatedUsers, Role: storage.RoleReader}}
+	ACL []storage.ACLRule
 }
 
 // FS is an interface which defines a virtual filesystem.
@@ -83,4 +89,4 @@ type FS interface {
 	URL(ctx context.Context, path string, options *SignedURLOptions) (string, error)
 }
 
-type SignedURLOptions blob.SignedURLOptions
+type SignedURLOptions storage.SignedURLOptions
