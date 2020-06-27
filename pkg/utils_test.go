@@ -4,9 +4,8 @@ import (
 	"context"
 	"testing"
 
+	storage "github.com/dhillondeep/go-storage/pkg"
 	"github.com/stretchr/testify/assert"
-
-	"github.com/Shopify/go-storage/pkg"
 )
 
 func TestExists(t *testing.T) {

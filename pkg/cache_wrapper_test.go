@@ -5,9 +5,8 @@ import (
 	"testing"
 	"time"
 
+	storage "github.com/dhillondeep/go-storage/pkg"
 	"github.com/stretchr/testify/assert"
-
-	"github.com/Shopify/go-storage/pkg"
 )
 
 func withCache(options *storage.CacheOptions, cb func(fs storage.FS, src storage.FS, cache storage.FS)) {

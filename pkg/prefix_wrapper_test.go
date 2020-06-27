@@ -3,7 +3,7 @@ package storage_test
 import (
 	"testing"
 
-	"github.com/Shopify/go-storage/pkg"
+	storage "github.com/dhillondeep/go-storage/pkg"
 )
 
 const prefix = "testPrefix/"

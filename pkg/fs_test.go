@@ -6,9 +6,8 @@ import (
 	"io/ioutil"
 	"testing"
 
+	storage "github.com/dhillondeep/go-storage/pkg"
 	"github.com/stretchr/testify/assert"
-
-	"github.com/Shopify/go-storage/pkg"
 )
 
 func testOpenExists(t *testing.T, fs storage.FS, path string, content string) {

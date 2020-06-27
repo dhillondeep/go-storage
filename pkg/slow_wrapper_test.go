@@ -4,9 +4,8 @@ import (
 	"testing"
 	"time"
 
+	storage "github.com/dhillondeep/go-storage/pkg"
 	"github.com/stretchr/testify/assert"
-
-	storage "github.com/Shopify/go-storage/pkg"
 )
 
 const slowDelay = 400 * time.Millisecond

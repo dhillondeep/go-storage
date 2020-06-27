@@ -6,9 +6,8 @@ import (
 	"fmt"
 	"testing"
 
+	storage "github.com/dhillondeep/go-storage/pkg"
 	"github.com/stretchr/testify/assert"
-
-	"github.com/Shopify/go-storage/pkg"
 )
 
 func TestNewStatsWrapper(t *testing.T) {

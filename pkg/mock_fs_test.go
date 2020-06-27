@@ -2,12 +2,13 @@ package storage_test
 
 import (
 	"context"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/mock"
 	"os"
 	"testing"
 
-	"github.com/Shopify/go-storage/pkg"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
+
+	storage "github.com/dhillondeep/go-storage/pkg"
 )
 
 func Test_mockFS_Attributes(t *testing.T) {
