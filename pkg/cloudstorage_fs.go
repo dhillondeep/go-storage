@@ -3,24 +3,25 @@ package storage
 import (
 	"context"
 	"io"
-	"time"
 
-	"google.golang.org/api/option"
+	"gocloud.dev/gcerrors"
 
-	credentials "cloud.google.com/go/iam/credentials/apiv1"
-	"cloud.google.com/go/storage"
 	"github.com/pkg/errors"
-	credentialspb "google.golang.org/genproto/googleapis/iam/credentials/v1"
+	"gocloud.dev/blob"
+	"gocloud.dev/blob/gcsblob"
+	"gocloud.dev/gcp"
+	"golang.org/x/oauth2/google"
+	"google.golang.org/api/storage/v1"
 )
 
 var ErrCredentialsMissing = errors.New("credentials missing")
 
 // NewCloudStorageFS creates a Google Cloud Storage FS
 // credentials can be nil to use the default GOOGLE_APPLICATION_CREDENTIALS
-func NewCloudStorageFS(bucket string, opts ...option.ClientOption) FS {
+func NewCloudStorageFS(bucket string, credentials *google.Credentials) FS {
 	return &cloudStorageFS{
-		bucket: bucket,
-		opts:   opts,
+		bucket:      bucket,
+		credentials: credentials,
 	}
 }
 
@@ -28,57 +29,40 @@ func NewCloudStorageFS(bucket string, opts ...option.ClientOption) FS {
 // file storage.
 type cloudStorageFS struct {
 	// bucket is the name of the bucket to use as the underlying storage.
-	bucket string
-	opts   []option.ClientOption
+	bucket      string
+	credentials *google.Credentials
 }
 
 func (c *cloudStorageFS) URL(ctx context.Context, path string, options *SignedURLOptions) (string, error) {
-	creds, err := credentials.NewIamCredentialsClient(ctx, c.opts...)
+	b, err := c.bucketHandleForSigning(ctx, storage.DevstorageReadOnlyScope)
 	if err != nil {
-		return "", errors.Wrap(err, "cloud stoarge: error while creating credentials")
+		return "", err
 	}
 
-	var storageOptions *storage.SignedURLOptions
+	var blobOptions *blob.SignedURLOptions
 	if options != nil {
-		o := storage.SignedURLOptions(*options)
-		storageOptions = &o
+		o := blob.SignedURLOptions(*options)
+		blobOptions = &o
 	}
 
-	if storageOptions.Expires.IsZero() {
-		storageOptions.Expires = time.Now().Add(15 * time.Minute)
-	}
-
-	storageOptions.Method = "GET"
-	storageOptions.SignBytes = func(b []byte) ([]byte, error) {
-		req := &credentialspb.SignBlobRequest{
-			Payload: b,
-			Name:    storageOptions.GoogleAccessID,
-		}
-		resp, err := creds.SignBlob(ctx, req)
-		if err != nil {
-			return nil, errors.Wrap(err, "cloud storage: error signing blob for SignURL")
-		}
-		return resp.SignedBlob, err
-	}
-
-	return storage.SignedURL(c.bucket, path, storageOptions)
+	return b.SignedURL(ctx, path, blobOptions)
 }
 
 // Open implements FS.
 func (c *cloudStorageFS) Open(ctx context.Context, path string, options *ReaderOptions) (*File, error) {
-	b, err := c.bucketHandle(ctx)
+	b, err := c.bucketHandle(ctx, storage.DevstorageReadOnlyScope)
 	if err != nil {
 		return nil, err
 	}
 
-	f, err := b.Object(path).NewReader(ctx)
+	f, err := b.NewReader(ctx, path, nil)
 	if err != nil {
-		if err == storage.ErrObjectNotExist {
+		if gcerrors.Code(err) == gcerrors.NotFound {
 			return nil, &notExistError{
 				Path: path,
 			}
 		}
-		return nil, errors.Wrap(err, "cloud storage: error fetching object attributes")
+		return nil, err
 	}
 
 	return &File{
@@ -86,19 +70,19 @@ func (c *cloudStorageFS) Open(ctx context.Context, path string, options *ReaderO
 		Attributes: Attributes{
 			ContentType: f.ContentType(),
 			Size:        f.Size(),
-			ModTime:     f.Attrs.LastModified,
+			ModTime:     f.ModTime(),
 		},
 	}, nil
 }
 
 // Attributes implements FS.
 func (c *cloudStorageFS) Attributes(ctx context.Context, path string, options *ReaderOptions) (*Attributes, error) {
-	b, err := c.bucketHandle(ctx)
+	b, err := c.bucketHandle(ctx, storage.DevstorageReadOnlyScope)
 	if err != nil {
 		return nil, err
 	}
 
-	a, err := b.Object(path).Attrs(ctx)
+	a, err := b.Attributes(ctx, path)
 	if err != nil {
 		return nil, err
 	}
@@ -106,57 +90,50 @@ func (c *cloudStorageFS) Attributes(ctx context.Context, path string, options *R
 	return &Attributes{
 		ContentType: a.ContentType,
 		Metadata:    a.Metadata,
-		ModTime:     a.Updated,
+		ModTime:     a.ModTime,
 		Size:        a.Size,
 	}, nil
 }
 
 // Create implements FS.
 func (c *cloudStorageFS) Create(ctx context.Context, path string, options *WriterOptions) (io.WriteCloser, error) {
-	b, err := c.bucketHandle(ctx)
+	b, err := c.bucketHandle(ctx, storage.DevstorageReadWriteScope)
 	if err != nil {
 		return nil, err
 	}
-
-	obj := b.Object(path)
-
-	writer := obj.NewWriter(ctx)
-	writer.Metadata = options.Attributes.Metadata
-	writer.ContentType = options.Attributes.ContentType
-	writer.Size = options.Attributes.Size
-	writer.ChunkSize = options.BufferSize
-
-	if options.ACL != nil {
-		writer.ACL = options.ACL
-	} else {
-		writer.ACL = []storage.ACLRule{{Entity: storage.AllAuthenticatedUsers, Role: storage.RoleReader}}
+	var blobOpts *blob.WriterOptions
+	if options != nil {
+		blobOpts = &blob.WriterOptions{
+			Metadata:    options.Attributes.Metadata,
+			ContentType: options.Attributes.ContentType,
+			BufferSize:  options.BufferSize,
+		}
 	}
-
-	return writer, nil
+	return b.NewWriter(ctx, path, blobOpts)
 }
 
 // Delete implements FS.
 func (c *cloudStorageFS) Delete(ctx context.Context, path string) error {
-	b, err := c.bucketHandle(ctx)
+	b, err := c.bucketHandle(ctx, storage.DevstorageFullControlScope)
 	if err != nil {
 		return err
 	}
-	return b.Object(path).Delete(ctx)
+	return b.Delete(ctx, path)
 }
 
 // Walk implements FS.
 func (c *cloudStorageFS) Walk(ctx context.Context, path string, fn WalkFn) error {
-	b, err := c.bucketHandle(ctx)
+	bh, err := c.bucketHandle(ctx, storage.DevstorageReadOnlyScope)
 	if err != nil {
 		return err
 	}
 
-	it := b.Objects(ctx, &storage.Query{
+	it := bh.List(&blob.ListOptions{
 		Prefix: path,
 	})
 
 	for {
-		r, err := it.Next()
+		r, err := it.Next(ctx)
 		if err == io.EOF {
 			break
 		}
@@ -165,27 +142,61 @@ func (c *cloudStorageFS) Walk(ctx context.Context, path string, fn WalkFn) error
 			return err
 		}
 
-		if err = fn(r.Name); err != nil {
+		if err = fn(r.Key); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (c *cloudStorageFS) client(ctx context.Context) (*storage.Client, error) {
-	client, err := storage.NewClient(ctx, c.opts...)
-	if err != nil {
-		return nil, errors.Wrap(err, "cloud storage: unable to create client")
+func (c *cloudStorageFS) findCredentials(ctx context.Context, scope string, extraScopes ...string) (*google.Credentials, error) {
+	if c.credentials != nil {
+		return c.credentials, nil
 	}
-
-	return client, nil
+	return google.FindDefaultCredentials(ctx, append(extraScopes, scope)...)
 }
 
-func (c *cloudStorageFS) bucketHandle(ctx context.Context) (*storage.BucketHandle, error) {
-	client, err := c.client(ctx)
+func (c *cloudStorageFS) client(ctx context.Context, scope string, extraScopes ...string) (*gcp.HTTPClient, *google.Credentials, error) {
+	creds, err := c.findCredentials(ctx, scope, extraScopes...)
+	if err != nil {
+		return nil, nil, errors.Wrap(err, "cloud storage: unable to retrieve default token source")
+	}
+
+	client, err := gcp.NewHTTPClient(gcp.DefaultTransport(), gcp.CredentialsTokenSource(creds))
+	if err != nil {
+		return nil, nil, errors.Wrap(err, "cloud storage: unable to build http client")
+	}
+
+	return client, creds, nil
+}
+
+func (c *cloudStorageFS) bucketHandle(ctx context.Context, scope string, extraScopes ...string) (*blob.Bucket, error) {
+	client, _, err := c.client(ctx, scope, extraScopes...)
 	if err != nil {
 		return nil, err
 	}
 
-	return client.Bucket(c.bucket), nil
+	return gcsblob.OpenBucket(ctx, client, c.bucket, nil)
+}
+
+func (c *cloudStorageFS) bucketHandleForSigning(ctx context.Context, scope string, extraScopes ...string) (*blob.Bucket, error) {
+	client, creds, err := c.client(ctx, scope, extraScopes...)
+	if err != nil {
+		return nil, err
+	}
+
+	if creds == nil {
+		return nil, ErrCredentialsMissing
+	}
+
+	config, err := google.JWTConfigFromJSON(creds.JSON, append(extraScopes, scope)...)
+	if err != nil {
+		return nil, errors.Wrap(err, "cloud storage: parse credentials")
+	}
+	options := &gcsblob.Options{
+		PrivateKey:     config.PrivateKey,
+		GoogleAccessID: config.Email,
+	}
+
+	return gcsblob.OpenBucket(ctx, client, c.bucket, options)
 }
