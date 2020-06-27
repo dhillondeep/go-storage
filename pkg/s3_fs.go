@@ -16,7 +16,7 @@ import (
 )
 
 func NewS3FS(bucket string, cfgs ...*aws.Config) FS {
-	return &s3FS{bucket: bucket}
+	return &s3FS{bucket: bucket, cfgs: cfgs}
 }
 
 // s3FS is an implementation of FS which uses AWS s3FS as the underlying storage layer.
