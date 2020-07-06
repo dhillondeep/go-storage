@@ -1,8 +1,16 @@
 # Storage
 
-storage is a Go package which abstracts file systems (local, in-memory, Google Cloud Storage, S3) into a few interfaces.  It includes convenience wrappers for simplifying common file system use cases such as caching, prefix isolation and more!
+Go package that abstracts file systems (local, in-memory, Google Cloud Storage, S3) into a few interfaces.
+It includes convenience wrappers for simplifying common file system use cases such as caching, prefix isolation and more!
 
-Forked from https://github.com/Shopify/go-storage
+Forked from [https://github.com/Shopify/go-storage](https://github.com/Shopify/go-storage)
+
+### Main features:
+- Upload and Download of objects with nice `io.Reader` and `io.Writer` interface.
+- SignedURL support for GCS and S3.
+- Same interface for all types of storage types.
+- Ability to `walk` the filesystem with a consistent implementation.
+- Extremely customizable with configurations, wrappers, and layers.
 
 # Requirements
 
@@ -16,7 +24,7 @@ $ go get github.com/dhillondeep/go-storage
 
 # Usage
 
-All storage in this package follow two simple interfaces designed for using file systems.
+All storage implementations in this package follow two simple interfaces designed for using file systems.
 
 ```go
 type FS interface {
@@ -109,20 +117,20 @@ if err != nil {
 f.Close()
 ```
 
-You can also use `ClientOption` to provide custom authentication:
+You can also use `google.Credentials` to provide custom authentication:
 ```go
-creds, err := google.CredentialsFromJSON(context.Background(), []byte("JSON data"))
+creds, err := google.CredentialsFromJSON(context.Background(), []byte("JSON data"), "https://www.googleapis.com/auth/cloud-platform")
 if err != nil {
     // ...
 }
-store := storage.NewCloudStorageFS("some-bucket", option.WithCredentials(creds))
+store := storage.NewCloudStorageFS("some-bucket", creds)
 ```
 
 ## S3
 
 S3 is the default implementation for AWS S3. This uses [aws-sdk-go/aws/session.NewSession](http://docs.aws.amazon.com/sdk-for-go/api/aws/session/#NewSession) for authentication.
  ```go
-store := storage.S3{Bucket:"some-bucket"}
+store := storage.NewS3FS("some-bucket")
 f, err := store.Open(context.Background(), "file.json", nil) // will fetch "s3://some-bucket/file.json
 if err != nil {
 	// ...
@@ -133,7 +141,7 @@ f.Close()
 
 You can also provide `aws.Config` to provide custom authentication:
 ```go
-store := store.S3{Buket:"some-bucket", &aws.Config{
+store := store.NewS3FS("some-bucket", &aws.Config{
 		Region:      aws.String("region"),
 		Credentials: credentials.NewStaticCredentials("secretId", "secretKey", ""),
 })
@@ -165,7 +173,8 @@ if err != nil {
 f.Close()
 ```
 
-This is particularly useful when distributing files across multiple regions or between cloud providers.  For instance, we could add the following code to the previous example:
+This is particularly useful when distributing files across multiple regions or between cloud providers.
+For instance, we could add the following code to the previous example:
 
 ```go
 mainSrc := storage.NewCloudStorage("some-bucket-in-another-region")
@@ -193,7 +202,8 @@ f.Close()
 
 ### Adding prefixes to paths
 
-If you're writing code that relies on a set directory structure, it can be very messy to have to pass path-patterns around.  You can avoid this by wrapping `storage.FS` implementations with `storage.Prefix` that rewrites all incoming paths.
+If you're writing code that relies on a set directory structure, it can be very messy to have to pass path-patterns around.
+You can avoid this by wrapping `storage.FS` implementations with `storage.Prefix` that rewrites all incoming paths.
 
 ```go
 modelFS := storage.NewPrefixWrapper(rootFS, "models/")
