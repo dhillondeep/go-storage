@@ -83,4 +83,4 @@ type FS interface {
 	URL(ctx context.Context, path string, options *SignedURLOptions) (string, error)
 }
 
-type SignedURLOptions blob.SignedURLOptions
+type SignedURLOptions = blob.SignedURLOptions

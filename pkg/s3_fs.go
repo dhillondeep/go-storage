@@ -156,5 +156,10 @@ func (s *s3FS) bucketHandles(ctx context.Context) (*blob.Bucket, error) {
 }
 
 func (s *s3FS) URL(ctx context.Context, path string, options *SignedURLOptions) (string, error) {
-	return "", ErrNotImplemented
+	bucket, err := s.bucketHandles(ctx)
+	if err != nil {
+		return "", err
+	}
+
+	return bucket.SignedURL(ctx, path, options)
 }

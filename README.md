@@ -122,7 +122,7 @@ store := storage.NewCloudStorageFS("some-bucket", option.WithCredentials(creds))
 
 S3 is the default implementation for AWS S3. This uses [aws-sdk-go/aws/session.NewSession](http://docs.aws.amazon.com/sdk-for-go/api/aws/session/#NewSession) for authentication.
  ```go
-store := storage.S3{Bucket:"some-bucket"}
+store := storage.NewS3FS("some-bucket")
 f, err := store.Open(context.Background(), "file.json", nil) // will fetch "s3://some-bucket/file.json
 if err != nil {
 	// ...
@@ -133,7 +133,7 @@ f.Close()
 
 You can also provide `aws.Config` to provide custom authentication:
 ```go
-store := store.S3{Buket:"some-bucket", &aws.Config{
+store := store.NewS3FS("some-bucket", &aws.Config{
 		Region:      aws.String("region"),
 		Credentials: credentials.NewStaticCredentials("secretId", "secretKey", ""),
 })
