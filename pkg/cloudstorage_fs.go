@@ -189,13 +189,16 @@ func (c *cloudStorageFS) bucketHandleForSigning(ctx context.Context, scope strin
 		return nil, ErrCredentialsMissing
 	}
 
-	config, err := google.JWTConfigFromJSON(creds.JSON, append(extraScopes, scope)...)
-	if err != nil {
-		return nil, errors.Wrap(err, "cloud storage: parse credentials")
-	}
-	options := &gcsblob.Options{
-		PrivateKey:     config.PrivateKey,
-		GoogleAccessID: config.Email,
+	var options *gcsblob.Options
+	if c.credentials != nil {
+		config, err := google.JWTConfigFromJSON(creds.JSON, append(extraScopes, scope)...)
+		if err != nil {
+			return nil, errors.Wrap(err, "cloud storage: parse credentials")
+		}
+		options = &gcsblob.Options{
+			PrivateKey:     config.PrivateKey,
+			GoogleAccessID: config.Email,
+		}
 	}
 
 	return gcsblob.OpenBucket(ctx, client, c.bucket, options)
